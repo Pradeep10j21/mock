@@ -241,7 +241,7 @@ const CompanyDashboard = () => {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <button
                 onClick={() => {
-                  const sid = 'session-' + Math.floor(1000 + Math.random() * 9000);
+                  const sid = '3000';
                   navigate(`/hr-interview-panel?session=${sid}&role=interviewer`);
                 }}
                 className="p-4 rounded-xl bg-forest-medium/10 hover:bg-forest-medium/20 transition-colors text-center group border border-forest-medium/30"

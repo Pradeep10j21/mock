@@ -41,6 +41,7 @@ const HRInterviewPortal = () => {
     const [notes, setNotes] = useState('');
     const [decision, setDecision] = useState('Hold');
     const [isSaving, setIsSaving] = useState(false);
+    const [isInterviewActive, setIsInterviewActive] = useState(false);
     const [interviewStartTime, setInterviewStartTime] = useState<Date | null>(null);
     const [elapsedTime, setElapsedTime] = useState('00:00:00');
     const [guideCollapsed, setGuideCollapsed] = useState(false);
@@ -50,6 +51,9 @@ const HRInterviewPortal = () => {
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [debugStatus, setDebugStatus] = useState<string[]>([]);
     const [volumeLevel, setVolumeLevel] = useState(0);
+    const [candidateName, setCandidateName] = useState<string>('Candidate');
+    const [candidateInfo, setCandidateInfo] = useState<any>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
 
     const addDebug = (msg: string) => setDebugStatus(prev => [msg, ...prev].slice(0, 5));
 
@@ -90,7 +94,7 @@ const HRInterviewPortal = () => {
 
     // Housekeeping
     const companyData = getCompanyData();
-    const SESSION_ID = urlParams.get('session') || 'final_test'; // Dynamic session ID
+    const SESSION_ID = urlParams.get('session') || '3000'; // Default to 3000
     const HOST_ID = `mockello-hr-${SESSION_ID}`;
     const CANDIDATE_ID = `mockello-candidate-${SESSION_ID}`;
     // Swap IDs: If I'm the interviewer, I want my ID to be HOST_ID.
@@ -115,51 +119,55 @@ const HRInterviewPortal = () => {
     const MIN_SPEECH_FRAMES = 2; // Reduced from 5 to 2
 
     const processAudioChunk = async (blob: Blob, speechFrames: number, maxVol: number) => {
-        if (speechFrames < MIN_SPEECH_FRAMES) {
-            addDebug(`Skip: Silence (Frames: ${speechFrames}, MaxVol: ${maxVol})`);
+        // More sensitive check
+        if (speechFrames < 1 && maxVol < 5) {
+            addDebug(`Skip: Silence (Frames: ${speechFrames}, Peak: ${maxVol})`);
             return;
         }
 
-        addDebug(`Sending... (Frames: ${speechFrames}, Vol: ${maxVol})`);
+        addDebug(`Transcribing... (${blob.size}b)`);
+        setIsProcessing(true);
         try {
             const text = await whisperService.transcribeAudio(blob);
-            if (!text) return;
+            if (!text || text.trim().length < 2) {
+                addDebug("Silence/Empty");
+                return;
+            }
 
-            // Hallucination Filtering
+            // Hallucination Filtering (Only if EXACT match for common ones)
             const hallucinations = [
-                'Thank you', 'Thanks for watching', 'Subtitle by', 'Amara.org', 'Support us', 'Copyright',
-                'All rights reserved', 'Translated by', 'Transcribed by', '.'
+                'thank you', 'thanks for watching', 'subtitle by', 'amara.org', 'support us', 'copyright',
+                'all rights reserved', 'translated by', 'transcribed by', '.'
             ];
 
             const cleanup = text.trim();
-            if (cleanup.length < 2) return;
-            if (hallucinations.some(h => cleanup.toLowerCase().includes(h.toLowerCase()))) {
-                addDebug("Filtered Hallucination");
+            if (hallucinations.includes(cleanup.toLowerCase())) {
+                addDebug("Filtered Noise");
                 return;
             }
 
             // Success
-            console.log(`[Transcription] Final: "${cleanup}"`);
-            addDebug(`Final: ${cleanup.substring(0, 20)}...`);
+            console.log(`[Transcription] Result: "${cleanup}"`);
+            addDebug(`Result: ${cleanup.substring(0, 15)}...`);
 
-            setTranscripts(prev => {
-                const newMsg: TranscriptMsg = {
-                    speaker: isInterviewer ? 'HR' : 'Candidate',
-                    text: cleanup,
-                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                };
+            const newMsg: TranscriptMsg = {
+                speaker: isInterviewer ? 'HR' : 'Candidate',
+                text: cleanup,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
 
-                // Send to peer
-                if (connInstance.current && connInstance.current.open) {
-                    connInstance.current.send({ type: 'transcript', payload: newMsg });
-                }
+            setTranscripts(prev => [...prev, newMsg]);
 
-                return [...prev, newMsg];
-            });
+            // Send to peer
+            if (connInstance.current && connInstance.current.open) {
+                connInstance.current.send({ type: 'transcript', payload: newMsg });
+            }
 
         } catch (e) {
             console.error(e);
-            addDebug("Error: API Call Failed");
+            addDebug("Error: Whisper Failed");
+        } finally {
+            setIsProcessing(false);
         }
     };
 
@@ -169,7 +177,18 @@ const HRInterviewPortal = () => {
         setIsTranscribing(true);
         addDebug("Starting Recorder...");
 
-        const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' });
+        let mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/ogg';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+                mimeType = 'audio/mp4';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = ''; // Let browser decide
+                }
+            }
+        }
+
+        const mediaRecorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : {});
         mediaRecorderRef.current = mediaRecorder;
 
         // VAD State for current chunk
@@ -220,7 +239,7 @@ const HRInterviewPortal = () => {
             }
         };
 
-        mediaRecorder.start(4000); // 4 second chunks
+        mediaRecorder.start(2500); // Shorter chunks (2.5s) for better responsiveness
 
         // Cleanup function stored in ref or effect
         return () => {
@@ -261,6 +280,10 @@ const HRInterviewPortal = () => {
         conn.on('data', (data: any) => {
             if (data.type === 'transcript') {
                 setTranscripts(prev => [...prev, data.payload]);
+            } else if (data.type === 'candidate-info') {
+                setCandidateName(data.payload.name);
+                setCandidateInfo(data.payload);
+                toast.info(`Candidate joined: ${data.payload.name}`);
             }
         });
         conn.on('error', (err) => console.error("[Data] Error:", err));
@@ -280,7 +303,23 @@ const HRInterviewPortal = () => {
         }
         const conn = peer.connect(targetPeerId);
         handleConnection(conn);
-    }, [targetPeerId, handleConnection]);
+
+        // If candidate, send info as soon as connection is established (delay slightly to ensures open)
+        if (!isInterviewer) {
+            setTimeout(() => {
+                if (connInstance.current && connInstance.current.open) {
+                    connInstance.current.send({
+                        type: 'candidate-info',
+                        payload: {
+                            ...candidateInfo,
+                            name: candidateName || candidateInfo?.fullName || 'Candidate',
+                            email: candidateInfo?.email || localStorage.getItem('userEmail') || 'candidate@example.com'
+                        }
+                    });
+                }
+            }, 2000); // Wait for connection to stabilize
+        }
+    }, [targetPeerId, handleConnection, isInterviewer, candidateName, candidateInfo]);
 
     // --- LifeCycle ---
     useEffect(() => {
@@ -294,7 +333,15 @@ const HRInterviewPortal = () => {
 
                 try { startTranscription(); } catch (e) { console.error(e); }
 
-                const peer = new Peer(myId, { debug: 1 });
+                const peer = new Peer(myId, {
+                    debug: 1,
+                    config: {
+                        iceServers: [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            { urls: 'stun:stun1.l.google.com:19302' },
+                        ]
+                    }
+                });
                 peerInstance.current = peer;
 
                 peer.on('open', (id) => {
@@ -312,13 +359,31 @@ const HRInterviewPortal = () => {
                     });
                 });
 
-                // Auto-connect for candidate (with delay to let host init)
                 if (!isInterviewer) {
                     console.log("[Student] Scheduling connection attempt...");
                     setTimeout(() => connectToHost(peer, stream), 2000);
+
+                    // Fetch profile info for sync
+                    const email = localStorage.getItem('userEmail');
+                    if (email) {
+                        try {
+                            const resp = await fetch(`${API_BASE_URL}/student/me/${email}`);
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                setCandidateName(data.fullName || data.name || 'Candidate');
+                                setCandidateInfo(data);
+                            }
+                        } catch (e) { console.error("Could not fetch student info", e); }
+                    }
                 }
 
-                peer.on('connection', (conn) => handleConnection(conn));
+                peer.on('connection', (conn) => {
+                    handleConnection(conn);
+                    // If interviewer, wait for info
+                });
+
+                // Send info when conn opens if I'm candidate and someone connects to me (unlikely in this flow but safe)
+                // Handled in connectToHost mostly.
 
                 peer.on('error', (err) => {
                     console.error("[Peer] Error:", err.type);
@@ -428,24 +493,68 @@ const HRInterviewPortal = () => {
     const handleManualRetry = () => {
         if (peerInstance.current && streamRef.current) connectToHost(peerInstance.current, streamRef.current);
     };
+
+    const copyInviteLink = () => {
+        const url = window.location.origin + `/hr-interview-panel?session=${SESSION_ID}&role=candidate`;
+        navigator.clipboard.writeText(url);
+        toast.success("Invite link copied!");
+    };
+
     const endCall = () => navigate(isInterviewer ? '/company/dashboard' : '/student/dashboard');
+
+    const handleStartInterview = () => {
+        setInterviewStartTime(new Date());
+        setIsInterviewActive(true);
+        toast.info("Interview Started");
+    };
+
+    const handleEndInterview = async () => {
+        if (isSaving) return;
+        setIsInterviewActive(false);
+        await handleSaveNotes();
+        toast.success("Interview Ended and Results Saved");
+        setTimeout(() => navigate('/company/dashboard'), 2000);
+    };
 
     const handleSaveNotes = async () => {
         setIsSaving(true);
         try {
-            const resp = await fetch(`${API_BASE_URL}/company/interview-result`, {
+            const hrEmail = companyData?.hrEmail || localStorage.getItem('userEmail') || 'hr@mockello.com';
+            const candidateId = candidateInfo?.email || 'GuestCandidate';
 
+            console.log("[SaveNotes] Payload:", {
+                company_email: hrEmail,
+                candidate_id: candidateId,
+                notes,
+                decision,
+                timestamp: new Date().toISOString()
+            });
+
+            const resp = await fetch(`${API_BASE_URL}/company/interview-result`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    company_email: companyData?.hrEmail || 'demo@company.com',
-                    candidate_id: 'Student',
-                    notes, decision, timestamp: new Date().toISOString()
+                    company_email: hrEmail,
+                    candidate_id: candidateId,
+                    notes: notes || "No notes provided",
+                    decision: decision || "Hold",
+                    timestamp: new Date().toISOString()
                 })
             });
-            if (resp.ok) toast.success("Saved"); else toast.error("Failed");
-        } catch (e) { toast.error("Error"); }
-        finally { setIsSaving(false); }
+
+            if (resp.ok) {
+                toast.success("Interview Results Saved Successfully");
+            } else {
+                const err = await resp.text();
+                console.error("[SaveNotes] Backend Error:", err);
+                toast.error("Failed to save results to database");
+            }
+        } catch (e) {
+            console.error("[SaveNotes] Network Error:", e);
+            toast.error("Network error saving results");
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const TranscriptionBox = ({ isDark = false }) => (
@@ -471,17 +580,28 @@ const HRInterviewPortal = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
                 {transcripts.length === 0 ? (
-                    <div className="h-full flex items-center justify-center opacity-20 text-xs italic">Waiting for speech...</div>
+                    <div className="h-full flex flex-col items-center justify-center opacity-20 text-xs italic gap-2">
+                        <MessageSquare size={24} />
+                        <span>Waiting for speech...</span>
+                    </div>
                 ) : (
-                    transcripts.map((t, i) => (
-                        <div key={i} className={`flex flex-col ${t.speaker === (isInterviewer ? 'HR' : 'Candidate') ? 'items-end' : 'items-start'}`}>
-                            <span className="text-[9px] font-bold uppercase opacity-40 mb-1">{t.speaker}</span>
-                            <div className={`px-4 py-2 rounded-2xl text-[11px] max-w-[85%] ${t.speaker === 'HR' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20' : (isDark ? 'bg-white/10' : 'bg-white border shadow-sm')
-                                }`}>
-                                {t.text}
+                    <>
+                        {transcripts.map((t, i) => (
+                            <div key={i} className={`flex flex-col ${t.speaker === (isInterviewer ? 'HR' : 'Candidate') ? 'items-end' : 'items-start'}`}>
+                                <span className="text-[9px] font-bold uppercase opacity-40 mb-1">{t.speaker}</span>
+                                <div className={`px-4 py-2 rounded-2xl text-[11px] max-w-[85%] ${t.speaker === 'HR' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20' : (isDark ? 'bg-white/10' : 'bg-white border shadow-sm')
+                                    }`}>
+                                    {t.text}
+                                </div>
                             </div>
-                        </div>
-                    ))
+                        ))}
+                        {isProcessing && (
+                            <div className="flex items-start gap-2 opacity-50">
+                                <span className="text-[9px] font-bold uppercase opacity-40">...</span>
+                                <div className="px-3 py-1 rounded-full bg-slate-100 dark:bg-white/5 text-[9px]">Transcribing...</div>
+                            </div>
+                        )}
+                    </>
                 )}
                 <div ref={transcriptEndRef} />
             </div>
@@ -533,14 +653,6 @@ const HRInterviewPortal = () => {
         );
     }
 
-    const interviewGuide = [
-        '1. Self Introduction',
-        '2. Experience',
-        '3. Communication',
-        '4. Strengths & Weaknesses',
-        '5. Career Goals',
-        '6. Cultural Fit'
-    ];
 
     return (
         <div className="h-screen bg-[#f4fbf7] text-slate-800 flex flex-col overflow-hidden font-sans">
@@ -549,143 +661,223 @@ const HRInterviewPortal = () => {
                 <div className="flex items-center gap-6 flex-1">
                     <div>
                         <h1 className="text-lg font-bold text-[#14442f]">HR Interview Panel</h1>
-                        <p className="text-xs text-[#3b6b55] mt-0.5">Siddharth J. Srivastava | Software Engineer | resume-1052-04.647407.mp4</p>
+                        <p className="text-xs text-[#3b6b55] mt-0.5">{candidateName} | Software Engineer | Session ID: {SESSION_ID}</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
-                        <span className="text-xs font-semibold text-[#18543d]">LIVE</span>
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-[#d6efe0] shadow-sm">
+                        <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div>
+                        <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight">
+                            {isConnected ? 'Candidate Connected' : 'Waiting for Candidate'}
+                        </span>
                     </div>
-                    <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/60 text-[#18543d] border border-[#d9efe0]">Connection: Stable</span>
-                    <span className="text-xs font-mono font-bold text-[#145032]">{elapsedTime}</span>
-                    <Button size="sm" className="bg-[#15543b] hover:bg-[#11412d] text-white font-semibold rounded-lg" onClick={() => !interviewStartTime && setInterviewStartTime(new Date())}>Start Interview</Button>
+                    <Button
+                        size="sm"
+                        className={`${isInterviewActive ? 'bg-red-500 hover:bg-red-600' : 'bg-[#15543b] hover:bg-[#11412d]'} text-white font-bold text-xs px-6 rounded-lg transition-all shadow-md`}
+                        onClick={isInterviewActive ? handleEndInterview : handleStartInterview}
+                    >
+                        {isInterviewActive ? 'Stop Session' : 'Start Interview'}
+                    </Button>
                     <Button size="sm" variant="ghost" className="text-[#145032] hover:bg-white/50">Debug</Button>
                 </div>
             </header>
 
             {/* Main Content */}
             <div className="flex-1 flex overflow-hidden">
-                {/* Left Sidebar - Resume */}
-                <div className="w-80 bg-[#eaf6ef] border-r border-[#d6efe0] p-6 flex flex-col gap-4 overflow-y-auto rounded-tr-2xl rounded-br-2xl">
-                    <div>
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-bold text-sm text-slate-900">Resume</h2>
-                            <span className="text-xs text-slate-500 font-semibold">Page 1 / 2</span>
+                {/* Left Sidebar - Candidate Profile */}
+                <div className="w-96 bg-[#eaf6ef] border-r border-[#d6efe0] p-6 flex flex-col gap-6 overflow-y-auto rounded-tr-2xl rounded-br-2xl">
+                    <div className="flex flex-col items-center">
+                        <div className="w-20 h-20 rounded-full bg-[#15543b] flex items-center justify-center text-white text-2xl font-bold mb-4 border-4 border-white shadow-md">
+                            {candidateName.charAt(0)}
                         </div>
-                        <Button size="sm" variant="outline" className="w-full text-xs">Download</Button>
+                        <h3 className="text-base font-bold text-slate-900">{candidateName}</h3>
+                        <p className="text-xs text-[#3b6b55] font-medium">{candidateInfo?.email || 'Candidate Email'}</p>
                     </div>
-                    <div className="flex-1 bg-white rounded-xl p-4 border border-[#e6efe9] flex items-start justify-start min-h-[300px] shadow-sm overflow-auto">
-                        <div className="w-full text-sm text-[#145032]">
-                            <h3 className="text-base font-bold">Siddharth J. Srivastava</h3>
-                            <p className="text-xs text-[#3b6b55] mb-3">Software Engineer • Mumbai Institute of Technology • +91 98765 43210 • siddharth@example.com</p>
 
-                            <div className="text-xs text-slate-700 mb-3">
-                                <div className="font-semibold text-[12px]">Summary</div>
-                                <div className="mt-1 text-[12px] text-slate-600">Experienced full-stack developer with 4+ years building scalable web applications using React, Node.js and Python. Passionate about building delightful user experiences and reliable backend systems.</div>
-                            </div>
-
-                            <div className="text-xs text-slate-700 mb-3">
-                                <div className="font-semibold text-[12px]">Experience</div>
-                                <div className="mt-1 text-[12px] space-y-2 text-slate-600">
-                                    <div>
-                                        <div className="font-semibold">Senior Developer — TechCorp Solutions</div>
-                                        <div className="text-[11px] text-slate-500">2022 — Present</div>
-                                    </div>
-                                    <div>
-                                        <div className="font-semibold">Developer — DataFlow Inc</div>
-                                        <div className="text-[11px] text-slate-500">2019 — 2022</div>
-                                    </div>
+                    <div className="space-y-4">
+                        {/* Education Section */}
+                        <div className="bg-white/60 rounded-xl p-4 border border-[#e6efe9] shadow-sm">
+                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+                                <Users size={12} /> Education
+                            </h4>
+                            <div className="space-y-1">
+                                <p className="text-xs font-bold text-slate-800">{candidateInfo?.degree || 'Degree'} - {candidateInfo?.branch || 'Branch'}</p>
+                                <p className="text-[11px] text-slate-600 font-medium">{candidateInfo?.collegeName || 'Institution name not available'}</p>
+                                <div className="mt-2 flex items-center justify-between">
+                                    <span className="text-[10px] text-slate-500">Graduation Year: {candidateInfo?.yearOfPassing || 'N/A'}</span>
+                                    <span className="text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded">CGPA: {candidateInfo?.cgpa || 'N/A'}</span>
                                 </div>
                             </div>
+                        </div>
 
-                            <div className="text-xs text-slate-700 mb-2">
-                                <div className="font-semibold text-[12px]">Education</div>
-                                <div className="mt-1 text-[12px] text-slate-600">B.Tech Computer Science — Mumbai Institute of Technology, 2019</div>
+                        {/* Skills Section */}
+                        <div className="bg-white/60 rounded-xl p-4 border border-[#e6efe9] shadow-sm">
+                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+                                <Settings size={12} /> Technical Skills
+                            </h4>
+                            <div className="flex flex-wrap gap-1.5">
+                                {(candidateInfo?.skills || 'Communication, Problem Solving').split(',').map((skill: string, i: number) => (
+                                    <span key={i} className="px-2 py-0.5 bg-[#eaf6ef] text-[#15543b] rounded text-[10px] font-semibold border border-[#d6efe0]">
+                                        {skill.trim()}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Experience Section */}
+                        <div className="bg-white/60 rounded-xl p-4 border border-[#e6efe9] shadow-sm">
+                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 flex items-center gap-1.5">
+                                <FileText size={12} /> Experience / Internships
+                            </h4>
+                            <p className="text-[11px] text-slate-600 leading-relaxed italic">
+                                {candidateInfo?.internshipExperience || 'No internship experience listed.'}
+                            </p>
+                        </div>
+
+                        {/* Additional Info */}
+                        <div className="bg-white/60 rounded-xl p-4 border border-[#e6efe9] shadow-sm">
+                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2">Identification</h4>
+                            <div className="grid grid-cols-2 gap-2 text-[10px]">
+                                <div>
+                                    <p className="text-slate-400 uppercase font-bold">Register No</p>
+                                    <p className="text-slate-700 font-medium">{candidateInfo?.registerNumber || 'N/A'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-slate-400 uppercase font-bold">Contact</p>
+                                    <p className="text-slate-700 font-medium">{candidateInfo?.mobileNumber || 'N/A'}</p>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div className="text-xs text-[#436b55] font-semibold">Page 2 (preview)</div>
-                    <div className="h-32 bg-white rounded-xl border border-[#e6efe9] shadow-sm"></div>
                 </div>
 
-                {/* Center - Video */}
-                <div className="flex-1 bg-transparent p-6 flex flex-col relative">
+                {/* Center - Video Area */}
+                <div className="flex-1 bg-transparent p-6 flex flex-col relative overflow-hidden">
                     <div className="flex-1 bg-white rounded-3xl border-2 border-[#e6efe9] overflow-hidden relative flex items-center justify-center shadow-md">
                         {!isConnected ? (
-                            <div className="flex flex-col items-center gap-3 text-slate-400">
-                                <RefreshCw className="w-10 h-10 animate-spin opacity-50" />
-                                <span className="text-sm font-semibold">Waiting for Candidate...</span>
-                                <Button size="sm" variant="outline" className="mt-2" onClick={handleManualRetry}>
-                                    Connect Now
-                                </Button>
+                            <div className="flex flex-col items-center gap-4 text-slate-400">
+                                <div className="p-4 bg-emerald-50 rounded-full">
+                                    <RefreshCw className="w-10 h-10 animate-spin text-emerald-600" />
+                                </div>
+                                <div className="text-center">
+                                    <p className="text-sm font-bold text-slate-700">Waiting for Candidate</p>
+                                    <p className="text-xs text-slate-500 mt-1">Session Protocol: {SESSION_ID}</p>
+                                </div>
+                                <div className="flex gap-2 mt-2">
+                                    <Button size="sm" variant="outline" onClick={handleManualRetry} className="h-8 text-xs font-bold border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                                        Manual Connect
+                                    </Button>
+                                    <Button size="sm" variant="secondary" onClick={copyInviteLink} className="h-8 text-xs font-bold bg-white border shadow-sm">
+                                        Copy Link
+                                    </Button>
+                                </div>
                             </div>
                         ) : (
                             <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
                         )}
-                        <div className="absolute top-4 left-4 px-3 py-1 bg-[#eaf6ef] text-[#145032] rounded-full text-xs font-semibold border border-[#d6efe0]">Stable</div>
-                        <div className="absolute bottom-4 right-4 text-xs text-[#37624a] font-semibold">Camera: Off</div>
+
+                        {/* Status Overlays */}
+                        <div className="absolute top-4 left-4 flex gap-2">
+                            <div className="px-3 py-1 bg-emerald-500 text-white rounded-full text-[10px] font-bold uppercase tracking-wider shadow-sm uppercase">HD Live</div>
+                            {isTranscribing && <div className="px-3 py-1 bg-amber-500 text-white rounded-full text-[10px] font-bold uppercase tracking-wider shadow-sm flex items-center gap-1.5">
+                                <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div> Captions Active
+                            </div>}
+                        </div>
+
+                        {/* Picture-in-Picture (Interviewer) */}
+                        <div className="absolute bottom-6 left-6 w-48 aspect-video bg-white rounded-xl border-2 border-[#e6efe9] flex items-center justify-center text-xs text-[#37624a] font-semibold overflow-hidden shadow-2xl z-20">
+                            <video ref={myVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                            <div className="absolute bottom-2 right-2 bg-black/40 backdrop-blur px-2 py-0.5 rounded text-[9px] font-bold text-white uppercase tracking-wider">Interviewer</div>
+                        </div>
                     </div>
-                    <div className="mt-4 flex items-center justify-center gap-3">
-                        <Button variant="outline" size="icon" onClick={toggleMic} className={`w-10 h-10 rounded-lg ${!isMicOn ? 'bg-red-500 text-white border-red-500' : ''}`}>
-                            {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
+
+                    {/* Media Controls */}
+                    <div className="mt-6 flex items-center justify-center gap-4">
+                        <Button variant="outline" size="icon" onClick={toggleMic} className={`w-12 h-12 rounded-2xl shadow-sm transition-all ${!isMicOn ? 'bg-red-500 text-white border-red-500 hover:bg-red-600' : 'bg-white hover:bg-slate-50'}`}>
+                            {isMicOn ? <Mic size={20} /> : <MicOff size={20} />}
                         </Button>
-                        <Button variant="outline" size="icon" onClick={toggleVideo} className={`w-10 h-10 rounded-lg ${!isVideoOn ? 'bg-red-500 text-white border-red-500' : ''}`}>
-                            {isVideoOn ? <Video size={18} /> : <VideoOff size={18} />}
+                        <Button variant="outline" size="icon" onClick={toggleVideo} className={`w-12 h-12 rounded-2xl shadow-sm transition-all ${!isVideoOn ? 'bg-red-500 text-white border-red-500 hover:bg-red-600' : 'bg-white hover:bg-slate-50'}`}>
+                            {isVideoOn ? <Video size={20} /> : <VideoOff size={20} />}
                         </Button>
-                        <Button variant="outline" size="icon" onClick={isScreenSharing ? stopScreenShare : startScreenShare} className={`w-10 h-10 rounded-lg ${isScreenSharing ? 'bg-emerald-600 text-white border-emerald-600' : ''}`} title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}>
-                            <Video size={18} />
+                        <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+                            className={`w-12 h-12 rounded-2xl shadow-sm transition-all ${isScreenSharing ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white hover:bg-slate-50'}`}
+                            title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
+                        >
+                            <Signal size={20} />
                         </Button>
-                    </div>
-                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-48 h-32 bg-white rounded-lg border-2 border-[#e6efe9] flex items-center justify-center text-xs text-[#37624a] font-semibold overflow-hidden shadow-sm">
-                        <video ref={myVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                        <div className="absolute bottom-2 right-2 bg-white px-2 py-1 rounded text-xs font-semibold text-slate-700">You</div>
+                        <div className="w-px h-8 bg-slate-200 mx-2"></div>
+                        <Button variant="destructive" onClick={handleEndInterview} className="h-12 px-8 rounded-2xl font-bold uppercase tracking-widest shadow-lg">
+                            End Interview
+                        </Button>
                     </div>
                 </div>
 
-                {/* Right Sidebar - Guide & Notes */}
-                <div className="w-72 bg-[#eaf6ef] border-l border-[#d6efe0] flex flex-col p-6 gap-6 overflow-y-auto rounded-tl-2xl rounded-bl-2xl">
-                    {/* Interview Guide */}
-                    <div className="border border-[#e6efe9] rounded-xl p-4 bg-white/30">
-                        <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-bold text-sm text-slate-900">HR Interview Guide</h3>
-                            <Button size="sm" variant="ghost" className="text-xs h-6 px-2" onClick={() => setGuideCollapsed(!guideCollapsed)}>
-                                {guideCollapsed ? 'Expand' : 'Collapse'}
-                            </Button>
-                        </div>
-                        {!guideCollapsed && (
-                            <div className="space-y-2">
-                                {interviewGuide.map((item, idx) => (
-                                    <div key={idx} className="text-xs text-slate-600 py-1">{item}</div>
-                                ))}
-                            </div>
-                        )}
+                {/* Right Sidebar - Transcript & Notes */}
+                <div className="w-80 bg-[#eaf6ef] border-l border-[#d6efe0] flex flex-col p-6 gap-6 overflow-y-auto rounded-tl-2xl rounded-bl-2xl">
+                    {/* Real-time Transcription */}
+                    <div className="h-[350px] bg-white rounded-xl border border-[#e6efe9] overflow-hidden shadow-sm flex flex-col shrink-0">
+                        <TranscriptionBox isDark={false} />
                     </div>
 
                     {/* Interview Notes */}
                     <div className="flex-1 flex flex-col">
                         <div className="flex items-center justify-between mb-3">
                             <h3 className="font-bold text-sm text-slate-900">HR Interview Notes</h3>
-                            <span className="text-xs text-emerald-600 font-semibold">All changes saved</span>
+                            <span className="text-xs text-emerald-600 font-semibold bg-emerald-50 px-2 py-0.5 rounded">Active</span>
                         </div>
+
+                        <div className="mb-4">
+                            <label className="text-[10px] font-bold uppercase text-slate-500 mb-1 block">Quick Decision</label>
+                            <select
+                                value={decision}
+                                onChange={(e) => setDecision(e.target.value)}
+                                className="w-full p-2.5 text-xs border border-[#e6efe9] rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-[#15543b]/20 focus:border-[#15543b] transition-all"
+                            >
+                                <option value="Hold">On Hold</option>
+                                <option value="Hire">Recommend Hire</option>
+                                <option value="Reject">Reject</option>
+                            </select>
+                        </div>
+
                         <Textarea
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            className="flex-1 resize-none border border-[#e6efe9] rounded-lg p-3 text-xs leading-relaxed focus:border-[#15543b] focus:outline-none bg-white"
-                            placeholder="Capture answers, behavior, confidence, communication quality, and observations..."
+                            className="flex-1 resize-none border border-[#e6efe9] rounded-xl p-3 text-xs leading-relaxed focus:ring-2 focus:ring-[#15543b]/20 focus:border-[#15543b] focus:outline-none bg-white font-sans"
+                            placeholder="Type observations about communication, technical grounding, behavioral fit..."
                         />
+
+                        <Button
+                            variant="outline"
+                            className="mt-4 w-full text-xs font-bold rounded-xl border-[#d7efe0] bg-white hover:bg-[#eaf6ef] text-[#15543b] h-10 shadow-sm"
+                            onClick={handleSaveNotes}
+                            disabled={isSaving}
+                        >
+                            {isSaving ? 'Syncing...' : 'Save Draft Notes'}
+                        </Button>
                     </div>
                 </div>
             </div>
 
-            {/* Bottom Bar */}
-            <div className="h-16 bg-transparent border-t border-[#e0f0e6] flex items-center justify-between px-8">
-                <div className="flex items-center gap-4">
-                    <span className="text-sm font-mono font-bold text-[#145032]">{elapsedTime}</span>
-                    <Button variant="outline" className="text-sm font-semibold rounded-lg border-[#d7efe0] bg-white">Mark Interview Completed</Button>
+            {/* Bottom Bar (Timer & Main Action) */}
+            <div className="h-16 bg-white border-t border-[#e0f0e6] flex items-center justify-between px-8 z-10 shadow-[0_-2px_10px_rgba(0,0,0,0.02)]">
+                <div className="flex items-center gap-6">
+                    <div className="flex flex-col">
+                        <span className="text-[10px] font-bold uppercase text-slate-400">Interview Duration</span>
+                        <span className="text-sm font-mono font-bold text-[#145032]">{elapsedTime}</span>
+                    </div>
                 </div>
                 <div className="flex items-center gap-3">
-                    <Button className="text-sm font-semibold rounded-lg bg-[#15543b] hover:bg-[#11412d] text-white">Proceed to Next Round</Button>
+                    <Button
+                        variant="default"
+                        className="text-sm font-bold h-10 px-8 rounded-xl bg-[#15543b] hover:bg-[#0e3a29] text-white shadow-md transition-all active:scale-95"
+                        onClick={handleSaveNotes}
+                        disabled={isSaving}
+                    >
+                        {isSaving ? 'Saving...' : 'Mark Interview Completed'}
+                    </Button>
                 </div>
             </div>
         </div>

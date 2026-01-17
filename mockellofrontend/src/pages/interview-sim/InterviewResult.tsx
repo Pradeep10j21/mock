@@ -222,7 +222,7 @@ const InterviewResult = () => {
                             </div>
 
                             <div className="mt-8 pt-6 border-t border-white/5 space-y-3">
-                                <Button className="w-full h-14 text-lg font-black bg-[#0F2C1F] hover:bg-[#1a402d] text-white shadow-xl shadow-green-900/20 rounded-2xl transition-all hover:scale-[1.02]" onClick={() => navigate('/hr-interview-panel?role=candidate&session=final_test')}>
+                                <Button className="w-full h-14 text-lg font-black bg-[#0F2C1F] hover:bg-[#1a402d] text-white shadow-xl shadow-green-900/20 rounded-2xl transition-all hover:scale-[1.02]" onClick={() => navigate('/hr-interview-panel?role=candidate&session=3000')}>
                                     <Users className="w-5 h-5 mr-2" /> PROCEED TO HR INTERVIEW
                                 </Button>
                                 <Button className="w-full h-12 text-lg font-semibold bg-white text-black hover:bg-gray-200" onClick={() => navigate('/interview')}>
