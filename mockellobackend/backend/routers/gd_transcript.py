@@ -52,7 +52,7 @@ def get_transcripts(sessionId: str, roomId: str = Query(None), background_tasks:
         now = datetime.now(timezone.utc)
         delta = (now - last_timestamp).total_seconds()
         
-        if delta > 5:
+        if delta > 8:
             if background_tasks:
                 background_tasks.add_task(process_ai_turn, roomId, True)
 

@@ -32,4 +32,6 @@ export const apiService = {
     async evaluateParticipant(sessionId: string, roomId: string, peerId: string) {
         return axios.post(`${API_BASE_URL}/gd-evaluation/evaluate`, { sessionId, roomId, peerId });
     },
+    toggleUserTalking: (roomId: string, isTalking: boolean) =>
+        api.post('/gd-session/toggle-user-talking', { roomId, isTalking }),
 };

@@ -31,6 +31,7 @@ class RoomModel(BaseModel):
     # Scalable Bot Fields (Moved from SessionModel)
     script: List[dict] = [] # Stores [{"sentiment": "For", "text": "..."}]
     current_script_index: int = 0 
+    isUserTalking: bool = False
     topic: str
 
 class SessionModel(BaseModel):

@@ -53,14 +53,17 @@ def process_ai_turn(roomId: str, is_silence_breaker: bool = False):
             print(f"Script finished for room {roomId}.")
             return
 
-        # Natural pause before Bot speaks
-        time.sleep(3)
+        # Natural pause before Bot speaks (Increased to 5s for better flow)
+        time.sleep(5)
 
-        # Re-check updated index in case of barge-in during sleep
+        # Re-check updated index & barge-in during sleep
         room_after = database["rooms"].find_one({"roomId": roomId})
         index_after = room_after.get("current_script_index", 0)
+        is_user_talking = room_after.get("isUserTalking", False)
         
-        if index != index_after:
+        if index != index_after or is_user_talking:
+            if is_user_talking:
+                print(f"DEBUG: AI Turn aborted due to User Barge-in in room {roomId}")
             return
 
         # 2. Get Next Line

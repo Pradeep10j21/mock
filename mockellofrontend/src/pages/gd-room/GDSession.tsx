@@ -114,6 +114,7 @@ export const GDSession: React.FC = () => {
     };
 
     const [isTalking, setIsTalking] = useState(false);
+    const [videoEnabled, setVideoEnabled] = useState(true);
     const recognitionRef = useRef<any>(null);
 
     // 5. Transcription & AI Speech
@@ -137,6 +138,7 @@ export const GDSession: React.FC = () => {
     const startTalking = () => {
         setIsTalking(true);
         window.speechSynthesis.cancel();
+        if (roomId) apiService.toggleUserTalking(roomId, true).catch(console.error);
         if (recognitionRef.current) {
             try { recognitionRef.current.start(); } catch (e) { }
         }
@@ -144,10 +146,12 @@ export const GDSession: React.FC = () => {
 
     const stopTalking = () => {
         setIsTalking(false);
+        if (roomId) apiService.toggleUserTalking(roomId, false).catch(console.error);
         if (recognitionRef.current) { recognitionRef.current.stop(); }
     };
 
     const speakNaturally = (text: string) => {
+        if (isTalking) return; // Barge-in: Don't start AI speech if user is talking
         const utt = new SpeechSynthesisUtterance(text);
         utt.rate = 0.9;
         window.speechSynthesis.speak(utt);
@@ -219,15 +223,18 @@ export const GDSession: React.FC = () => {
 
                     {/* My Video */}
                     <div className="relative bg-[#1A3329] rounded-xl overflow-hidden shadow-2xl aspect-video min-w-[300px] max-w-[48%] flex-1 ring-2 ring-emerald-500/30 border border-emerald-800/20">
-                        {myStream ? (
+                        {myStream && videoEnabled ? (
                             <video
                                 ref={ref => { if (ref) ref.srcObject = myStream }}
                                 autoPlay muted playsInline
                                 className="w-full h-full object-cover transform scale-x-[-1]"
                             />
                         ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                                <span className="bg-emerald-700/50 rounded-full w-14 h-14 flex items-center justify-center text-xl font-bold text-emerald-100">You</span>
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-[#0F2C1F]/50">
+                                <div className="w-20 h-20 bg-emerald-800/80 rounded-full flex items-center justify-center text-3xl font-bold text-emerald-100 mb-2">
+                                    {state?.name?.charAt(0) || 'Y'}
+                                </div>
+                                <span className="text-emerald-400/60 text-sm font-medium">{videoEnabled ? 'Starting camera...' : 'Camera turned off'}</span>
                             </div>
                         )}
                         <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm px-2 py-1 rounded text-xs font-medium text-emerald-100">You</div>
@@ -342,9 +349,19 @@ export const GDSession: React.FC = () => {
                         {isTalking ? <Mic size={24} /> : <MicOff size={24} className="text-red-400" />}
                     </button>
 
-                    {/* Camera Toggle (Fake) */}
-                    <button className="p-4 rounded-full bg-[#1A3329] hover:bg-[#234235] text-emerald-100 border border-emerald-700/30 transition-colors">
-                        <Video size={24} />
+                    {/* Camera Toggle */}
+                    <button
+                        onClick={() => {
+                            setVideoEnabled(!videoEnabled);
+                            if (myStream) {
+                                myStream.getVideoTracks().forEach(track => track.enabled = !videoEnabled);
+                            }
+                        }}
+                        className={`p-4 rounded-full transition-colors border shadow-lg ${videoEnabled
+                            ? 'bg-[#1A3329] hover:bg-[#234235] text-emerald-100 border-emerald-700/30'
+                            : 'bg-red-600/20 hover:bg-red-600/30 text-red-100 border-red-500/30'}`}
+                    >
+                        {videoEnabled ? <Video size={24} /> : <VideoOff size={24} />}
                     </button>
 
                     {/* Hand Raise (Cosmetic) */}

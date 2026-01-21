@@ -144,3 +144,17 @@ def get_my_room(sessionId: str, participantId: str):
         "participants": room["participants"],
         "aiCount": room["aiCount"]
     }
+@router.post("/toggle-user-talking")
+def toggle_user_talking(request: dict):
+    database = db.get_db()
+    room_id = request.get("roomId")
+    is_talking = request.get("isTalking", False)
+    
+    if not room_id:
+        raise HTTPException(status_code=400, detail="roomId required")
+        
+    database["rooms"].update_one(
+        {"roomId": room_id},
+        {"$set": {"isUserTalking": is_talking}}
+    )
+    return {"status": "ok", "isTalking": is_talking}
