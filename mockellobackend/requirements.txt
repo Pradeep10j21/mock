@@ -10,3 +10,4 @@ mangum
 requests
 groq
 pydantic-settings
+dnspython
