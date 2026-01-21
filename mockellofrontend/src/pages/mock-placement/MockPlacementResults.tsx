@@ -26,7 +26,6 @@ const MockPlacementResults = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [showConfetti, setShowConfetti] = useState(false);
-  const [nextRoundClicks, setNextRoundClicks] = useState(0);
 
   // Mock data fallback or use passed state
   const result: AssessmentResult = location.state?.result || {
@@ -387,18 +386,13 @@ const MockPlacementResults = () => {
               Retake
             </Button>
             <Button
-              className={`text-[#0F2C1F] border-0 rounded-xl shadow-lg hover:shadow-xl transition-all h-10 px-6 font-semibold ${(safeResult.correctAnswers > 20 || nextRoundClicks >= 5) ? '' : 'opacity-80 grayscale cursor-pointer active:scale-95'}`}
+              className="text-[#0F2C1F] border-0 rounded-xl shadow-lg hover:shadow-xl transition-all h-10 px-6 font-semibold hover:scale-105"
               style={{ backgroundColor: '#CCDBD0' }}
               onClick={() => {
-                const hasPassed = safeResult.correctAnswers > 20;
-                if (hasPassed || nextRoundClicks >= 5) {
-                  navigate('/techprep', { state: { mockPlacementScore: safeResult.accuracy } });
-                } else {
-                  setNextRoundClicks(prev => prev + 1);
-                }
+                navigate('/techprep', { state: { mockPlacementScore: safeResult.accuracy } });
               }}
             >
-              {safeResult.correctAnswers > 20 || nextRoundClicks >= 5 ? "Next: Technical Round" : "Technical Round (Locked)"}
+              Next: Technical Round
               <ChevronRight className="w-4 h-4 ml-2" />
             </Button>
           </div>
