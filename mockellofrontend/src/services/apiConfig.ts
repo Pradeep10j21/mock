@@ -1,11 +1,29 @@
 import axios from 'axios';
 
-// Detect environment to set appropriate backend URL
 const isDev = import.meta.env.DEV;
 const localUrl = 'http://127.0.0.1:8000';
-const productionUrl = 'https://mock-smna.onrender.com';
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || (isDev ? localUrl : productionUrl);
+// Load-balanced production backends
+const backendUrls = [
+  'https://mockello1234.onrender.com',
+  'https://mockellobackend.onrender.com'
+];
+
+// Select backend URL based on environment
+let productionUrl = backendUrls[0];
+if (import.meta.env.VITE_API_URL) {
+  productionUrl = import.meta.env.VITE_API_URL;
+} else if (typeof window !== 'undefined' && window.localStorage) {
+  // Simple round-robin: alternate between backends on refresh
+  const lastUsedIndex = parseInt(window.localStorage.getItem('lastBackendIndex') || '0');
+  const nextIndex = (lastUsedIndex + 1) % backendUrls.length;
+  productionUrl = backendUrls[nextIndex];
+  window.localStorage.setItem('lastBackendIndex', nextIndex.toString());
+}
+
+export const API_BASE_URL = isDev ? localUrl : productionUrl;
+console.log(`[API] Connected to backend: ${API_BASE_URL}`);
+
 
 export const SAVE_SCORE_URL = `${API_BASE_URL}/scores/save`;
 export const TECHNICAL_QUESTIONS_URL = `${API_BASE_URL}/technical-interview/questions`;

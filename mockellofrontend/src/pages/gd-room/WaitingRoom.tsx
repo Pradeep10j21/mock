@@ -51,7 +51,8 @@ export const WaitingRoom: React.FC = () => {
         } catch (err) {
           console.error(err);
         }
-      }, 1000); // Check every second for timer
+      }, 3000); // Check every 3 seconds for better scaling on free tier
+
     }
     return () => clearInterval(interval);
   }, [status, sessionId, navigate, myPeerId, name]);

@@ -103,117 +103,104 @@ def calculate_keyword_match(response: str, expected: str) -> float:
 
 @router.post("/evaluate", response_model=EvaluationResult)
 async def evaluate_technical_interview(request: EvaluateRequest):
-    qs_map = {q["question"]: q["expected"] for q in DOMAIN_QUESTION_BANK.get(request.department, {}).get(request.domain, DEFAULT_QUESTIONS)}
-    
-    total_score = 0
-    total_communication = 0
-    total_confidence = 0
-    total_technical = 0
-    
-    detailed_feedback = []
-    
-    # Linear Regression Weights (Predefined/Trained)
-    # Target: Overall Quality (0-100)
-    # Features:
-    # X1: Similarity (0-1) - Weights how much the structure matches expected
-    # X2: Keyword Match (0-1) - Weights content coverage
-    # X3: Length Ratio (0-1) - Penalizes too short answers
-    
-    W_SIMILARITY = 30
-    W_KEYWORD = 50
-    W_LENGTH = 20
-    BIAS = 5 
-    
-    for item in request.answers:
-        expected = qs_map.get(item.question, "")
-        if not expected:
-             # Basic fallback if unknown question
-             score = min(100, len(item.answer.split()) * 2)
-             detailed_feedback.append({
-                 "question": item.question,
-                 "score": score,
-                 "feedback": "Answer recorded."
-             })
-             total_score += score
-             total_communication += 70 # Default average
-             total_confidence += 70
-             total_technical += score
-             continue
+    def run_evaluation():
+        qs_map = {q["question"]: q["expected"] for q in DOMAIN_QUESTION_BANK.get(request.department, {}).get(request.domain, DEFAULT_QUESTIONS)}
+        
+        total_score = 0
+        total_communication = 0
+        total_confidence = 0
+        total_technical = 0
+        detailed_feedback = []
+        
+        W_SIMILARITY = 30
+        W_KEYWORD = 50
+        W_LENGTH = 20
+        BIAS = 5 
+        
+        for item in request.answers:
+            expected = qs_map.get(item.question, "")
+            if not expected:
+                 score = min(100, len(item.answer.split()) * 2)
+                 detailed_feedback.append({
+                     "question": item.question,
+                     "score": score,
+                     "feedback": "Answer recorded."
+                 })
+                 total_score += score
+                 total_communication += 70
+                 total_confidence += 70
+                 total_technical += score
+                 continue
 
-        # Feature Extraction
-        similarity = calculate_similarity(item.answer, expected)
-        keyword_match = calculate_keyword_match(item.answer, expected)
-        
-        # Length Ratio (capped at 1.0)
-        exp_len = len(expected)
-        resp_len = len(item.answer)
-        length_ratio = min(1.0, resp_len / max(1, exp_len))
-        
-        # Linear Equation
-        raw_score = (similarity * W_SIMILARITY) + (keyword_match * W_KEYWORD) + (length_ratio * W_LENGTH) + BIAS
-        final_score = min(100, max(0, int(raw_score)))
-        
-        # Derived Metric Estimates (Heuristics based on the same features)
-        # Communication: Correlates mostly with Similarity (Flow) and Length
-        comm_score = min(100, int((similarity * 60) + (length_ratio * 30) + 10))
-        
-        # Technical: Correlates highly with Keyword Match
-        tech_score = min(100, int((keyword_match * 80) + (similarity * 20)))
-        
-        # Confidence: Hard to detect textually without AI, use Length as proxy (Volume = Confidence usually)
-        conf_score = min(100, int((length_ratio * 70) + 30))
+            similarity = calculate_similarity(item.answer, expected)
+            keyword_match = calculate_keyword_match(item.answer, expected)
+            
+            exp_len = len(expected)
+            resp_len = len(item.answer)
+            length_ratio = min(1.0, resp_len / max(1, exp_len))
+            
+            raw_score = (similarity * W_SIMILARITY) + (keyword_match * W_KEYWORD) + (length_ratio * W_LENGTH) + BIAS
+            final_score = min(100, max(0, int(raw_score)))
+            
+            comm_score = min(100, int((similarity * 60) + (length_ratio * 30) + 10))
+            tech_score = min(100, int((keyword_match * 80) + (similarity * 20)))
+            conf_score = min(100, int((length_ratio * 70) + 30))
 
-        feedback_text = "Good answer."
-        if final_score < 50:
-            feedback_text = "Answer lacks key details expected for this topic."
-        elif final_score < 80:
-            feedback_text = "Good answer, but missed some specific technical terms."
-        else:
-            feedback_text = "Excellent answer, covers all key points."
+            feedback_text = "Good answer."
+            if final_score < 50:
+                feedback_text = "Answer lacks key details expected for this topic."
+            elif final_score < 80:
+                feedback_text = "Good answer, but missed some specific technical terms."
+            else:
+                feedback_text = "Excellent answer, covers all key points."
 
-        detailed_feedback.append({
-            "question": item.question,
-            "score": final_score,
-            "feedback": feedback_text
-        })
+            detailed_feedback.append({
+                "question": item.question,
+                "score": final_score,
+                "feedback": feedback_text
+            })
+            
+            total_score += final_score
+            total_communication += comm_score
+            total_confidence += conf_score
+            total_technical += tech_score
+
+        count = len(request.answers)
+        if count == 0:
+            return EvaluationResult(
+                overall_score=0, 
+                skill_breakdown={"communication":0, "confidence":0, "technicalClarity":0},
+                strengths=[], improvements=[], detailed_feedback=[]
+            )
+
+        avg_overall = int(total_score / count)
+        avg_comm = int(total_communication / count)
+        avg_conf = int(total_confidence / count)
+        avg_tech = int(total_technical / count)
+
+        strengths = []
+        improvements = []
         
-        total_score += final_score
-        total_communication += comm_score
-        total_confidence += conf_score
-        total_technical += tech_score
-
-    count = len(request.answers)
-    if count == 0:
+        if avg_tech > 75: strengths.append("Strong Technical Knowledge")
+        else: improvements.append("Review core technical concepts deeply")
+        
+        if avg_comm > 75: strengths.append("Clear Communication Style")
+        else: improvements.append("Practice structuring your answers more clearly")
+        
+        if avg_overall > 80: strengths.append("Excellent Interview Performance")
+        
         return EvaluationResult(
-            overall_score=0, 
-            skill_breakdown={"communication":0, "confidence":0, "technicalClarity":0},
-            strengths=[], improvements=[], detailed_feedback=[]
+            overall_score=avg_overall,
+            skill_breakdown={
+                "communication": avg_comm,
+                "confidence": avg_conf,
+                "technicalClarity": avg_tech
+            },
+            strengths=strengths,
+            improvements=improvements,
+            detailed_feedback=detailed_feedback
         )
 
-    avg_overall = int(total_score / count)
-    avg_comm = int(total_communication / count)
-    avg_conf = int(total_confidence / count)
-    avg_tech = int(total_technical / count)
+    import asyncio
+    return await asyncio.to_thread(run_evaluation)
 
-    strengths = []
-    improvements = []
-    
-    if avg_tech > 75: strengths.append("Strong Technical Knowledge")
-    else: improvements.append("Review core technical concepts deeply")
-    
-    if avg_comm > 75: strengths.append("Clear Communication Style")
-    else: improvements.append("Practice structuring your answers more clearly")
-    
-    if avg_overall > 80: strengths.append("Excellent Interview Performance")
-    
-    return EvaluationResult(
-        overall_score=avg_overall,
-        skill_breakdown={
-            "communication": avg_comm,
-            "confidence": avg_conf,
-            "technicalClarity": avg_tech
-        },
-        strengths=strengths,
-        improvements=improvements,
-        detailed_feedback=detailed_feedback
-    )

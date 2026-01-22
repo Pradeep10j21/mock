@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pymongo
+email-validator
+bcrypt
+python-jose[cryptography]
+python-multipart
+python-dotenv
+pydantic-settings
+dnspython
